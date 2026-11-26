@@ -1,9 +1,10 @@
-// Offline cache. Network first so updates show up, cache as fallback.
-const CACHE = 'wallet-v2';
-const FILES = ['./', 'index.html', 'app.js', 'split.js', 'sync.js', 'manifest.json', 'icon.svg'];
-self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES))));
+// Keeps the app shell available offline. Network first so updates show up.
+const CACHE = 'wallet-v3';
+const FILES = ['./', 'index.html', 'app.js', 'api.js', 'charts.js', 'split.js', 'config.js', 'manifest.json', 'icon.svg'];
+self.addEventListener('install', (e) => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES))); });
+self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))));
 self.addEventListener('fetch', (e) => {
-  if (new URL(e.request.url).origin !== location.origin) return;
+  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(fetch(e.request).then((r) => {
     const copy = r.clone();
     caches.open(CACHE).then((c) => c.put(e.request, copy));

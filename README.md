@@ -1,42 +1,61 @@
 # Our Wallet
 
-A small phone app for two people to share expenses and track money in and out.
-It installs from the browser ("Add to Home Screen"), works offline, and can sync
-between both phones through a free Supabase project.
+A shared money pool for two people. Each of you signs in with your email, one of
+you invites the other, and you both see the same wallet on your phones.
 
-## Features
+- **Add money:** who put money into the pool, and what for.
+- **Spend:** who spent, how much, the category and what it was for.
+  - Paid from **the pool**, or from **your own pocket**. Own-pocket costs can be split
+    evenly, by percentage, or per item. Any leftover, like tax or a tip, is split evenly.
+    The app shows who owes whom, and **Pay back** settles it.
+- **Dashboard:** switch between Day, Month and Year to see the pool balance, money in and out,
+  charts by day or month, spending by category, who added and who spent, and every record.
+- Edit or delete any record by tapping it. Changes show on the other phone right away.
 
-- Expenses split evenly, by percentage, or per item. With per item, any leftover
-  (tax, tip) is split evenly.
-- Running balance of who owes whom, with one-tap settle up.
-- Money in (income) for each person, monthly in/spent totals and history.
-- Edit or delete any entry. Export and import a backup file.
+Live app: https://kahhuitee90.github.io/our-wallet/
 
 ## Install on your phones
 
-1. Open the app link in Safari (iPhone) or Chrome (Android).
-2. iPhone: Share button > Add to Home Screen. Android: menu > Install app.
+- **iPhone:** open the link in Safari, tap Share, then **Add to Home Screen**.
+- **Android:** open the link in Chrome, tap the ⋮ menu, then **Install app** (or **Add to Home screen**).
 
-## Turn on cloud sync (about 5 minutes, once)
+## One-time Supabase setup (about 10 minutes, free)
 
-1. Make a free account at https://supabase.com and create a new project.
-2. In the project, open **SQL Editor**, paste everything in `setup.sql`, and press **Run**.
-3. Open **Project Settings > API Keys** (or **Data API**). Copy the **Project URL** and the
-   **publishable** key (older projects call it the **anon** key). Never use the
-   secret or service_role key.
-4. In the app on your phone, open **Settings > Cloud sync**, paste the URL and key,
-   tap **New** to make a wallet code, then tap **Connect**.
-5. Tap **Invite partner** and send the link to your partner. When they open it
-   on their phone, the app asks to join, and from then on both phones stay in sync.
+1. Make a free account at https://supabase.com and create a new project. Pick the region
+   closest to you (for Malaysia, Singapore).
+2. Open **SQL Editor**, paste everything in [`setup.sql`](setup.sql), and press **Run**.
+3. Open **Authentication > Sign In / Providers** and check that **Email** is on.
+4. Open **Authentication > URL Configuration**. Set **Site URL** to
+   `https://kahhuitee90.github.io/our-wallet/` and add the same address under **Redirect URLs**.
+5. Open **Authentication > Emails** (Email Templates), pick **Magic Link**, and add the
+   sign-in code to the message so you can type it into the app:
 
-The wallet code works like a shared password: only phones that know it can see
-your entries, so keep the invite link between the two of you.
+   ```html
+   <h2>Your Our Wallet sign-in</h2>
+   <p>Your code is <b>{{ .Token }}</b></p>
+   <p>Or tap <a href="{{ .ConfirmationURL }}">this link</a> to sign in.</p>
+   ```
+
+   On iPhone, the app on your home screen keeps its own sign-in separate from Safari,
+   so typing the code is the reliable way to sign in there.
+6. Open **Project Settings > API Keys**. Copy the **Project URL** and the **publishable** key
+   (older projects call it **anon**). Never use the secret or service_role key.
+   Put both into [`config.js`](config.js), or send them to Claude to add.
+
+### Email delivery
+
+Supabase's built-in email is for testing. It only sends to email addresses in your Supabase
+team, and only a few emails an hour. For the two of you, the easiest fix is to invite your
+partner's email to your Supabase organization (**Organization settings > Team**).
+For a real release, set up your own email sender under **Authentication > Emails > SMTP Settings**.
 
 ## Files
 
 - `index.html` – layout and styles
-- `app.js` – screens and entry forms
-- `split.js` – split and balance math (amounts are kept in cents)
-- `sync.js` – Supabase sync
-- `setup.sql` – the table and access rule to run in Supabase
+- `app.js` – screens: sign in, dashboard, add records, settings
+- `charts.js` – the dashboard charts
+- `split.js` – money math (amounts are kept in cents)
+- `api.js` – talks to Supabase
+- `config.js` – your Supabase URL and publishable key
+- `setup.sql` – tables and access rules: only members of a wallet can see or change it
 - `sw.js`, `manifest.json`, `icon.svg` – offline support and home-screen install
