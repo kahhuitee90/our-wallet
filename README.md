@@ -14,6 +14,12 @@ you invites the other, and you both see the same wallet on your phones.
 
 Live app: https://kahhuitee90.github.io/our-wallet/
 
+## Try it without signing in
+
+Open the app and tap **Try it without signing in**. Enter both names and you can use every
+feature on a computer or phone. Test data is saved in that browser only and is not shared.
+Leave test mode from Settings.
+
 ## Install on your phones
 
 - **iPhone:** open the link in Safari, tap Share, then **Add to Home Screen**.
@@ -27,8 +33,9 @@ Live app: https://kahhuitee90.github.io/our-wallet/
 3. Open **Authentication > Sign In / Providers** and check that **Email** is on.
 4. Open **Authentication > URL Configuration**. Set **Site URL** to
    `https://kahhuitee90.github.io/our-wallet/` and add the same address under **Redirect URLs**.
-5. Open **Authentication > Emails** (Email Templates), pick **Magic Link**, and add the
-   sign-in code to the message so you can type it into the app:
+5. Open **Authentication > Emails** (Email Templates). Do this for **both** the **Confirm signup**
+   template (used the first time an email signs in) and the **Magic Link** template (used after that).
+   Add the sign-in code to the message so you can type it into the app:
 
    ```html
    <h2>Your Our Wallet sign-in</h2>

@@ -1,5 +1,5 @@
 // Everything that talks to Supabase lives here.
-const Api = (() => {
+const CloudApi = (() => {
   let sb = null;
   let channel = null;
 

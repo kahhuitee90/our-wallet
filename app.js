@@ -38,13 +38,18 @@ async function run(fn) {
 async function start() {
   Charts.enableTips();
   if (!Api.configured()) return render();
-  Api.init();
-  Api.onAuth(async (s) => {
-    const changed = s?.user?.id !== S.session?.user?.id;
-    S.session = s;
-    if (changed) await loadWallet();
-  });
-  S.session = await Api.session();
+  try {
+    Api.init();
+    Api.onAuth(async (s) => {
+      const changed = s?.user?.id !== S.session?.user?.id;
+      S.session = s;
+      if (changed) await loadWallet();
+    });
+    S.session = await Api.session();
+  } catch (e) {
+    S.msg = 'Could not reach the sign-in service. You can still use "Try it without signing in" below.';
+    return render();
+  }
   await loadWallet();
   window.addEventListener('focus', () => S.wallet && refresh());
 }
@@ -79,7 +84,7 @@ function render() {
   let html;
   if (!Api.configured()) html = setupScreen();
   else if (!S.session) html = loginScreen();
-  else if (!S.wallet) html = joinScreen();
+  else if (!S.wallet) html = Api.local ? localSetupScreen() : joinScreen();
   else html = { dash, tx: transactions, settings }[S.tab]();
   const inApp = !!S.wallet;
   nav.classList.toggle('hidden', !inApp);
@@ -96,7 +101,10 @@ function setupScreen() {
     <label>Project URL</label><input id="cUrl" placeholder="https://abcdefghijklmnopqrst.supabase.co" autocapitalize="off" autocorrect="off" spellcheck="false">
     <label>Publishable key</label><input id="cKey" placeholder="sb_publishable_…" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div class="err" id="cfgErr"></div>
-    <button style="margin-top:6px" onclick="saveConfig()">Continue</button></div>`;
+    <button style="margin-top:6px" onclick="saveConfig()">Continue</button></div>
+    <div class="card"><div class="ctitle">Just want to try it?</div>
+      <p class="mute">Test every feature on this computer or phone without signing in. Data is saved in this browser only.</p>
+      <button class="ghost" onclick="startTestMode()">Try it without signing in</button></div>`;
 }
 function saveConfig() {
   const url = Api.cleanUrl($('#cUrl').value), key = $('#cKey').value.trim();
@@ -118,7 +126,10 @@ function loginScreen() {
       <p class="mute">Enter your email. We'll send you a sign-in code, no password needed.</p>
       <label>Email</label><input id="email" type="email" autocomplete="email" value="${esc(S.loginEmail)}">
       <button style="margin-top:14px" ${S.busy ? 'disabled' : ''} onclick="sendCode()">${S.busy ? 'Sending…' : 'Send code'}</button>
-      ${changeLink()}</div>`;
+      ${changeLink()}</div>
+    <div class="card"><div class="ctitle">Just want to try it?</div>
+      <p class="mute">Test every feature on this computer or phone without signing in. Data is saved in this browser only.</p>
+      <button class="ghost" onclick="startTestMode()">Try it without signing in</button></div>`;
   }
   return `<div class="card"><h2>Check your email</h2>
     <p class="mute">We sent a code to <b>${esc(S.loginEmail)}</b>. Type it here, or tap the link in the email.</p>
@@ -134,6 +145,21 @@ function sendCode() {
 function verifyCode() {
   const code = $('#code').value.trim();
   run(async () => { await Api.verifyCode(S.loginEmail, code); S.codeSent = false; });
+}
+
+function localSetupScreen() {
+  return `<div class="card"><h2>Test mode</h2>
+    <p class="mute">No sign-in needed. Everything is saved in this browser only, so you can try every feature. You can record transactions for either of you.</p>
+    <label>Your name</label><input id="myName" placeholder="e.g. Tee">
+    <label>Partner's name</label><input id="pName" placeholder="e.g. Mei">
+    <label>Currency</label><input id="wCur" value="RM">
+    <button style="margin-top:14px" onclick="createLocal()">Start</button>
+    <button class="ghost" style="margin-top:8px" onclick="leaveTestMode()">Back to sign in</button></div>`;
+}
+function createLocal() {
+  const a = $('#myName').value.trim(), b = $('#pName').value.trim();
+  if (!a || !b) return alert('Enter both names.');
+  run(async () => { await Api.createLocal('Our Wallet', $('#wCur').value.trim() || 'RM', a, b); await loadWallet(); });
 }
 
 function joinScreen() {
@@ -474,6 +500,7 @@ async function sheetRun(fn) {
 
 // ---------- settings ----------
 function settings() {
+  if (Api.local) return localSettings();
   const mine = S.wallet.members.find((m) => m.user_id === me());
   return `
     <div class="card"><div class="ctitle">Members</div>
@@ -492,6 +519,28 @@ function settings() {
       <button style="margin-top:14px" onclick="saveSettings()">Save</button></div>
     <div class="card"><div class="mute">Signed in as ${esc(S.session.user.email)}</div>
       <button class="ghost" style="margin-top:10px" onclick="Api.signOut()">Sign out</button>${changeLink()}</div>`;
+}
+function localSettings() {
+  const [a, b] = S.wallet.members;
+  return `<div class="card"><div class="ctitle">Test mode</div>
+      <p class="mute">Everything is saved in this browser only. Nothing is shared with your partner's phone yet.</p>
+      <label>Your name</label><input id="nA" value="${esc(a.display_name)}">
+      <label>Partner's name</label><input id="nB" value="${esc(b.display_name)}">
+      <label>Wallet name</label><input id="wName" value="${esc(S.wallet.name)}">
+      <label>Currency</label><input id="wCur" value="${esc(S.wallet.currency)}">
+      <button style="margin-top:14px" onclick="saveLocalSettings()">Save</button></div>
+    <div class="card">
+      <button class="ghost" onclick="eraseTestData()">Delete all test data</button>
+      <button class="ghost" style="margin-top:8px" onclick="leaveTestMode()">Leave test mode</button></div>`;
+}
+function saveLocalSettings() {
+  const [a, b] = S.wallet.members;
+  run(async () => {
+    await Api.updateName(a.user_id, $('#nA').value.trim() || a.display_name);
+    await Api.updateName(b.user_id, $('#nB').value.trim() || b.display_name);
+    await Api.updateWallet(S.wallet.id, { name: $('#wName').value.trim() || 'Our Wallet', currency: $('#wCur').value.trim() });
+    S.tab = 'dash'; await refresh();
+  });
 }
 function invite() {
   const email = $('#invEmail').value.trim();
