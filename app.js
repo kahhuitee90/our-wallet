@@ -92,24 +92,33 @@ function render() {
 
 function setupScreen() {
   return `<div class="card"><h2>Connect to Supabase</h2>
-    <p class="mute">Paste the Project URL and publishable key from your Supabase project. See the README for the steps.</p>
-    <label>Project URL</label><input id="cUrl" placeholder="https://xxxx.supabase.co">
-    <label>Publishable key</label><input id="cKey">
-    <button style="margin-top:14px" onclick="saveConfig()">Continue</button></div>`;
+    <p class="mute">In Supabase, open <b>Project Settings → API Keys</b> (or <b>Data API</b>). Copy the <b>Project URL</b>, which ends in <b>.supabase.co</b>, and the <b>publishable</b> key. This is not the address of this app.</p>
+    <label>Project URL</label><input id="cUrl" placeholder="https://abcdefghijklmnopqrst.supabase.co" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label>Publishable key</label><input id="cKey" placeholder="sb_publishable_…" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="err" id="cfgErr"></div>
+    <button style="margin-top:6px" onclick="saveConfig()">Continue</button></div>`;
 }
 function saveConfig() {
-  const url = $('#cUrl').value.trim(), key = $('#cKey').value.trim();
-  if (!/^https:\/\//.test(url) || !key) return alert('Enter both values.');
+  const url = Api.cleanUrl($('#cUrl').value), key = $('#cKey').value.trim();
+  const bad = !url ? 'That is not a Supabase Project URL. It should look like https://abcdefghijklmnopqrst.supabase.co' : Api.keyProblem(key);
+  if (bad) { $('#cfgErr').textContent = bad; return; }
   Api.saveConfig(url, key);
-  start();
+  location.reload();
 }
+function changeConnection() {
+  if (!confirm('Forget this Supabase connection and enter it again?')) return;
+  Api.resetConfig();
+  location.reload();
+}
+const changeLink = () => (Api.fromFile() ? '' : `<button class="link" style="margin-top:14px" onclick="changeConnection()">Change Supabase connection</button>`);
 
 function loginScreen() {
   if (!S.codeSent) {
     return `<div class="card"><h2>Sign in</h2>
       <p class="mute">Enter your email. We'll send you a sign-in code, no password needed.</p>
       <label>Email</label><input id="email" type="email" autocomplete="email" value="${esc(S.loginEmail)}">
-      <button style="margin-top:14px" ${S.busy ? 'disabled' : ''} onclick="sendCode()">${S.busy ? 'Sending…' : 'Send code'}</button></div>`;
+      <button style="margin-top:14px" ${S.busy ? 'disabled' : ''} onclick="sendCode()">${S.busy ? 'Sending…' : 'Send code'}</button>
+      ${changeLink()}</div>`;
   }
   return `<div class="card"><h2>Check your email</h2>
     <p class="mute">We sent a code to <b>${esc(S.loginEmail)}</b>. Type it here, or tap the link in the email.</p>
@@ -482,7 +491,7 @@ function settings() {
       <label>Currency</label><input id="wCur" value="${esc(S.wallet.currency)}">
       <button style="margin-top:14px" onclick="saveSettings()">Save</button></div>
     <div class="card"><div class="mute">Signed in as ${esc(S.session.user.email)}</div>
-      <button class="ghost" style="margin-top:10px" onclick="Api.signOut()">Sign out</button></div>`;
+      <button class="ghost" style="margin-top:10px" onclick="Api.signOut()">Sign out</button>${changeLink()}</div>`;
 }
 function invite() {
   const email = $('#invEmail').value.trim();

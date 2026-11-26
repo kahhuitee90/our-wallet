@@ -3,12 +3,31 @@ const Api = (() => {
   let sb = null;
   let channel = null;
 
+  // Turns whatever was pasted into "https://<ref>.supabase.co", or returns '' if it is not a Supabase project URL.
+  function cleanUrl(raw) {
+    let v = String(raw || '').trim();
+    if (/^[a-z0-9]{20}$/.test(v)) v = `https://${v}.supabase.co`; // just the project ref
+    if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+    try {
+      const u = new URL(v);
+      return /\.supabase\.(co|in)$/i.test(u.hostname) ? `https://${u.hostname.toLowerCase()}` : '';
+    } catch { return ''; }
+  }
+  // Returns an error message, or '' if the key looks usable in the app.
+  function keyProblem(k) {
+    if (!k) return 'Paste the publishable key.';
+    if (/^sb_secret_/.test(k) || /service_role/.test(k)) return 'That is the secret key. Never put it in the app. Use the publishable (or anon) key instead.';
+    if (!/^sb_publishable_/.test(k) && !/^eyJ/.test(k)) return 'That does not look like a Supabase key. It should start with sb_publishable_ (or eyJ for older anon keys).';
+    return '';
+  }
+  const fromFile = () => !!(window.WALLET_CONFIG?.supabaseUrl && window.WALLET_CONFIG?.supabaseKey);
   function config() {
     const c = window.WALLET_CONFIG || {};
+    if (fromFile()) return { url: cleanUrl(c.supabaseUrl), key: c.supabaseKey.trim() };
     const saved = JSON.parse(localStorage.getItem('wallet-config') || 'null') || {};
-    return { url: c.supabaseUrl || saved.url || '', key: c.supabaseKey || saved.key || '' };
+    return { url: cleanUrl(saved.url), key: (saved.key || '').trim() };
   }
-  const configured = () => !!(config().url && config().key);
+  const configured = () => !!(config().url && config().key && !keyProblem(config().key));
 
   function init() {
     const c = config();
@@ -17,11 +36,22 @@ const Api = (() => {
   }
 
   const appUrl = () => location.origin + location.pathname;
-  const check = ({ data, error }) => { if (error) throw new Error(error.message); return data; };
+  const check = ({ data, error }) => {
+    if (!error) return data;
+    let m = error.message || String(error);
+    if (/invalid path|failed to fetch|load failed|networkerror/i.test(m)) m += ' — the Supabase connection looks wrong. Tap "Change Supabase connection" below.';
+    throw new Error(m);
+  };
 
   return {
     configured,
+    cleanUrl, keyProblem, fromFile,
     saveConfig: (url, key) => localStorage.setItem('wallet-config', JSON.stringify({ url, key })),
+    // Forget the saved connection and any sign-in tied to it.
+    resetConfig() {
+      localStorage.removeItem('wallet-config');
+      Object.keys(localStorage).filter((k) => k.startsWith('sb-')).forEach((k) => localStorage.removeItem(k));
+    },
     init,
 
     // ---- Sign in ----
