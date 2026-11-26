@@ -1,5 +1,5 @@
 // Keeps the app shell available offline. Network first so updates show up.
-const CACHE = 'wallet-v3';
+const CACHE = 'wallet-v4';
 const FILES = ['./', 'index.html', 'app.js', 'api.js', 'charts.js', 'split.js', 'config.js', 'manifest.json', 'icon.svg'];
 self.addEventListener('install', (e) => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES))); });
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))));

@@ -1,9 +1,17 @@
 // Our Wallet: one shared money pool for two people.
-const CATEGORIES = ['Food', 'Groceries', 'Rent', 'Bills', 'Transport', 'Shopping', 'Travel', 'Fun', 'Health', 'Gifts', 'Other'];
+const OUT_CATS = [
+  { name: 'Food', icon: '🍜' }, { name: 'Groceries', icon: '🛒' }, { name: 'Rent', icon: '🏠' }, { name: 'Bills', icon: '💡' },
+  { name: 'Transport', icon: '🚗' }, { name: 'Shopping', icon: '🛍️' }, { name: 'Travel', icon: '✈️' }, { name: 'Fun', icon: '🎬' },
+  { name: 'Health', icon: '💊' }, { name: 'Gifts', icon: '🎁' }, { name: 'Pets', icon: '🐾' }, { name: 'Other', icon: '📦' },
+];
+const IN_CATS = [
+  { name: 'Top-up', icon: '💰' }, { name: 'Salary', icon: '💼' }, { name: 'Gift', icon: '🎀' }, { name: 'Refund', icon: '↩️' },
+];
+const icon = (name) => [...OUT_CATS, ...IN_CATS].find((c) => c.name === name)?.icon || '📦';
 
 const S = {
   session: null, wallet: null, entries: [], invites: [], myInvites: [],
-  tab: 'dash', period: 'month', anchor: today(),
+  tab: 'dash', period: 'month', anchor: today(), filter: 'all',
   form: null, loginEmail: '', codeSent: false, busy: false, msg: '',
 };
 
@@ -60,24 +68,26 @@ async function refresh() {
     const [entries, wallet, invites] = await Promise.all([Api.entries(S.wallet.id), Api.myWallet(me()), Api.invites(S.wallet.id)]);
     S.entries = entries; S.wallet = wallet; S.invites = invites;
   } catch (e) { S.msg = e.message; }
-  // Do not redraw over a form someone is filling in.
-  if (S.tab === 'dash') render();
+  // The add sheet draws separately, so this never wipes a half-filled form.
+  if (S.tab !== 'settings') render();
 }
 
 // ---------- screens ----------
+function go(tab) { S.tab = tab; S.msg = ''; render(); window.scrollTo(0, 0); }
 function render() {
   const nav = $('nav');
   let html;
   if (!Api.configured()) html = setupScreen();
   else if (!S.session) html = loginScreen();
   else if (!S.wallet) html = joinScreen();
-  else html = { dash, add, settings }[S.tab]();
-  nav.classList.toggle('hidden', !S.wallet);
+  else html = { dash, tx: transactions, settings }[S.tab]();
+  const inApp = !!S.wallet;
+  nav.classList.toggle('hidden', !inApp);
+  $('#fab').classList.toggle('hidden', !inApp || S.tab === 'settings');
   nav.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-  $('#title').textContent = S.wallet?.name || 'Our Wallet';
-  const err = S.msg ? `<div class="card err">${esc(S.msg)}</div>` : '';
+  $('#title').textContent = !inApp ? 'Our Wallet' : { dash: 'Dashboard', tx: 'Transactions', settings: 'Settings' }[S.tab];
+  const err = S.msg && !S.form ? `<div class="card err">${esc(S.msg)}</div>` : '';
   $('#app').innerHTML = err + html;
-  if (S.wallet && S.tab === 'add') wireAdd();
 }
 
 function setupScreen() {
@@ -148,7 +158,7 @@ function createWallet() {
 // ---------- dashboard ----------
 function periodRange() {
   const [y, m, d] = S.anchor.split('-').map(Number);
-  if (S.period === 'day') return { from: S.anchor, to: S.anchor, label: new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }) };
+  if (S.period === 'day') return { from: S.anchor, to: S.anchor, label: new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) };
   if (S.period === 'month') return { from: ymd(new Date(y, m - 1, 1)), to: ymd(new Date(y, m, 0)), label: new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
   return { from: `${y}-01-01`, to: `${y}-12-31`, label: String(y) };
 }
@@ -158,6 +168,13 @@ function shift(n) {
   S.anchor = ymd(dt); render();
 }
 function setPeriod(p) { S.period = p; render(); }
+const inPeriod = () => { const r = periodRange(); return S.entries.filter((e) => e.date >= r.from && e.date <= r.to); };
+
+function periodBar() {
+  const r = periodRange();
+  return `<div class="seg">${[['day', 'Day'], ['month', 'Month'], ['year', 'Year']].map(([v, l]) => `<button class="${S.period === v ? 'on' : ''}" onclick="setPeriod('${v}')">${l}</button>`).join('')}</div>
+    <div class="pnav"><button class="icon" onclick="shift(-1)" aria-label="Previous">‹</button><b>${r.label}</b><button class="icon" onclick="shift(1)" aria-label="Next">›</button></div>`;
+}
 
 function buckets(list) {
   const [y, m] = S.anchor.split('-').map(Number);
@@ -185,60 +202,112 @@ function buckets(list) {
 }
 
 function dash() {
-  const all = S.entries;
-  const r = periodRange();
-  const list = all.filter((e) => e.date >= r.from && e.date <= r.to);
+  const list = inPeriod();
   const sum = Money.summary(list);
-  const pool = Money.poolBalance(all);
-  const owe = paired() ? Money.owed(all, people()) : 0;
-  const [a, b] = people();
-  const oweLine = !owe ? '' : `<div class="owe">${owe > 0 ? `${nameOf(b)} owes ${nameOf(a)}` : `${nameOf(a)} owes ${nameOf(b)}`} <b>${money(Math.abs(owe))}</b> for own-pocket costs
-      <button class="ghost small" onclick="startSettle()">Settle up</button></div>`;
-  const cats = Object.entries(sum.byCategory).map(([label, value]) => ({ label, value })).sort((x, y) => y.value - x.value);
+  const all = Money.summary(S.entries);
+  const pool = Money.poolBalance(S.entries);
+  const fromPool = S.entries.filter((e) => e.type === 'out' && e.paid_from !== 'own').reduce((t, e) => t + e.amount, 0);
+  const cats = Object.entries(sum.byCategory).map(([label, value]) => ({ label: `${icon(label)} ${label}`, value })).sort((x, y) => y.value - x.value);
   const ppl = (S.wallet.members || []).map((m) => ({ name: m.display_name, ...(sum.byPerson[m.user_id] || { in: 0, out: 0 }) }));
+  const recent = S.entries.slice(0, 5);
 
   return `
-    <div class="card hero"><div class="mute">Money in the pool</div>
-      <div class="big ${pool < 0 ? 'neg' : ''}">${money(pool)}</div>${oweLine}</div>
-    <div class="seg">${[['day', 'Day'], ['month', 'Month'], ['year', 'Year']].map(([v, l]) => `<button class="${S.period === v ? 'on' : ''}" onclick="setPeriod('${v}')">${l}</button>`).join('')}</div>
-    <div class="pnav"><button class="ghost small" onclick="shift(-1)" aria-label="Previous">‹</button><b>${r.label}</b><button class="ghost small" onclick="shift(1)" aria-label="Next">›</button></div>
+    <h3 class="sect">Account overview</h3>
+    <section class="balance">
+      <div class="mute">Total balance in the wallet</div>
+      <div class="big ${pool < 0 ? 'neg' : ''}">${money(pool)}</div>
+      <div class="split2">
+        <div><div class="mute">Added in total</div><b>${money(all.in)}</b></div>
+        <div><div class="mute">Spent from wallet</div><b>${money(fromPool)}</b></div>
+      </div>
+      <div class="quick">
+        <button onclick="openSheet('in')"><span class="qi">＋</span>Add money</button>
+        <button onclick="openSheet('out')"><span class="qi">−</span>Spend</button>
+      </div>
+    </section>
+
+    ${paired() ? debtOverview() : ''}
+
+    <h3 class="sect">Expenses overview</h3>
+    ${periodBar()}
     <div class="tiles">
-      <div class="card tile"><div class="mute">Money in</div><div class="mid">${money(sum.in)}</div></div>
-      <div class="card tile"><div class="mute">Money out</div><div class="mid">${money(sum.out)}</div></div>
-      <div class="card tile"><div class="mute">Net</div><div class="mid ${sum.in - sum.out < 0 ? 'neg' : ''}">${money(sum.in - sum.out)}</div></div>
+      <div class="tile"><div class="mute">In</div><div class="mid">${money(sum.in)}</div></div>
+      <div class="tile"><div class="mute">Out</div><div class="mid">${money(sum.out)}</div></div>
+      <div class="tile"><div class="mute">Net</div><div class="mid ${sum.in - sum.out < 0 ? 'neg' : ''}">${money(sum.in - sum.out)}</div></div>
     </div>
-    ${S.period !== 'day' ? `<div class="card"><div class="ctitle">In and out by ${S.period === 'month' ? 'day' : 'month'}</div>${Charts.inOut(buckets(list), money)}</div>` : ''}
-    <div class="card"><div class="ctitle">Spending by category</div>${Charts.hbars(cats, money)}</div>
-    <div class="card"><div class="ctitle">Who added and who spent</div>${Charts.people(ppl, money)}</div>
-    <div class="card"><div class="ctitle">Records</div>${list.length ? list.map(row).join('') : '<p class="mute">No records in this period.</p>'}</div>`;
+    ${S.period !== 'day' ? `<section class="card"><div class="ctitle">In and out by ${S.period === 'month' ? 'day' : 'month'}</div>${Charts.inOut(buckets(list), money)}</section>` : ''}
+    <section class="card"><div class="ctitle">Spending by category</div>${Charts.hbars(cats, money)}</section>
+    <section class="card"><div class="ctitle">Who added and who spent</div>${Charts.people(ppl, money)}</section>
+    <section class="card"><div class="ctitle row"><span>Recent transactions</span><button class="link" onclick="go('tx')">See all ›</button></div>
+      ${recent.length ? recent.map(row).join('') : `<p class="mute">No transactions yet. Tap <b>Add money</b> to start.</p>`}</section>`;
+}
+
+// Own-pocket spends and pay-backs between the two of you.
+function debtOverview() {
+  const owe = Money.owed(S.entries, people());
+  const [a, b] = people();
+  const ownBy = (p) => S.entries.filter((e) => e.type === 'out' && e.paid_from === 'own' && e.person === p).reduce((t, e) => t + e.amount, 0);
+  const paidBack = S.entries.filter((e) => e.type === 'settle').reduce((t, e) => t + e.amount, 0);
+  const head = !owe
+    ? `<div class="debt-ok">✓ All square. Nobody owes anything.</div>`
+    : `<div class="debt"><div><div class="mute">${owe > 0 ? `${nameOf(b)} owes ${nameOf(a)}` : `${nameOf(a)} owes ${nameOf(b)}`}</div>
+        <div class="mid2">${money(Math.abs(owe))}</div></div><button class="small" onclick="startSettle()">Settle up</button></div>`;
+  return `<h3 class="sect">Debt overview</h3>
+    <section class="card">${head}
+      <div class="split2 top">
+        <div><div class="mute">${nameOf(a)} paid own pocket</div><b>${money(ownBy(a))}</b></div>
+        <div><div class="mute">${nameOf(b)} paid own pocket</div><b>${money(ownBy(b))}</b></div>
+      </div>
+      <div class="mute small-note">Paid back so far: ${money(paidBack)}</div>
+    </section>`;
+}
+
+// ---------- transactions ----------
+function transactions() {
+  const list = inPeriod().filter((e) => S.filter === 'all' || (S.filter === 'in' ? e.type === 'in' : S.filter === 'out' ? e.type === 'out' : e.category === S.filter));
+  const groups = {};
+  list.forEach((e) => (groups[e.date] ||= []).push(e));
+  const filters = [['all', 'All'], ['in', 'Money in'], ['out', 'Money out']].concat(OUT_CATS.map((c) => [c.name, `${c.icon} ${c.name}`]));
+  const body = Object.keys(groups).sort().reverse().map((d) => {
+    const net = groups[d].reduce((s, e) => s + (e.type === 'in' ? e.amount : e.type === 'out' ? -e.amount : 0), 0);
+    const label = new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    return `<div class="dayhead"><span>${label}</span><span>${net ? `${net > 0 ? '+' : '−'}${money(Math.abs(net))}` : ''}</span></div>
+      <section class="card list">${groups[d].map(row).join('')}</section>`;
+  }).join('');
+  return `${periodBar()}
+    <div class="chips scroll">${filters.map(([v, l]) => `<button class="chip ${S.filter === v ? 'on' : ''}" onclick="S.filter='${esc(v)}';render()">${l}</button>`).join('')}</div>
+    ${body || '<p class="mute center">No transactions here.</p>'}`;
 }
 
 function row(e) {
-  let title, sub, amt;
+  let title, sub, amt, ic;
   const when = new Date(e.date + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   if (e.type === 'in') {
-    title = e.note || 'Added money'; sub = `${nameOf(e.person)} added to pool`;
+    ic = icon(e.category || 'Top-up'); title = e.note || e.category || 'Added money';
+    sub = `${nameOf(e.person)} added`;
     amt = `<span class="pos">+${money(e.amount)}</span>`;
   } else if (e.type === 'out') {
-    title = e.note || e.category || 'Spent';
-    sub = `${esc(e.category || 'Other')} · ${nameOf(e.person)} ${e.paid_from === 'own' ? 'paid own pocket' : 'spent from pool'}`;
+    ic = icon(e.category); title = e.note || e.category || 'Spent';
+    sub = `${nameOf(e.person)} · ${e.paid_from === 'own' ? 'own pocket' : 'from pool'}`;
     if (e.paid_from === 'own' && paired()) {
       const sh = Money.shares(e, people());
       sub += ` · ${people().map((p) => `${nameOf(p)} ${money(sh[p])}`).join(', ')}`;
     }
-    amt = `<span>−${money(e.amount)}</span>`;
+    amt = `−${money(e.amount)}`;
   } else {
-    title = 'Settle up'; sub = `${nameOf(e.person)} paid back ${nameOf(e.to_person)}`; amt = money(e.amount);
+    ic = '🤝'; title = 'Pay back'; sub = `${nameOf(e.person)} paid ${nameOf(e.to_person)}`; amt = money(e.amount);
   }
-  return `<div class="tx" onclick="editEntry('${e.id}')"><div><div>${esc(title)}</div><div class="mute">${when} · ${sub}</div></div><div class="amt">${amt}</div></div>`;
+  return `<div class="tx" onclick="editEntry('${e.id}')"><div class="ic">${ic}</div>
+    <div class="txt"><div class="t">${esc(title)}</div><div class="mute">${when} · ${sub}</div></div><div class="amt">${amt}</div></div>`;
 }
 
-// ---------- add / edit ----------
+// ---------- add / edit sheet ----------
 function blank(type = 'out') {
-  const p = people();
-  return { type, amount: '', date: today(), person: me(), paid_from: 'pool', category: 'Food', note: '',
-    mode: 'even', pctA: 50, items: [{ name: '', amount: '', owner: 'both' }], id: null, _p: p };
+  return { type, amount: '', date: today(), person: me(), paid_from: 'pool', category: type === 'in' ? 'Top-up' : '', note: '',
+    mode: 'even', pctA: 50, items: [{ name: '', amount: '', owner: 'both' }], id: null };
 }
+function openSheet(type) { S.form = blank(type); renderSheet(); setTimeout(() => $('#sheet [name=amount]')?.focus(), 50); }
+function closeSheet() { S.form = null; renderSheet(); }
 function editEntry(id) {
   const e = S.entries.find((x) => x.id === id);
   if (!e) return;
@@ -248,13 +317,13 @@ function editEntry(id) {
     f.pctA = e.split.pct?.[people()[0]] ?? 50;
     if (e.split.items) f.items = e.split.items.map((i) => ({ ...i, amount: (i.amount / 100).toFixed(2) }));
   }
-  S.form = f; S.tab = 'add'; render();
+  S.form = f; renderSheet();
 }
 function startSettle() {
   const owe = Money.owed(S.entries, people());
   const [a, b] = people();
-  S.form = { ...blank('settle'), person: owe > 0 ? b : a, amount: (Math.abs(owe) / 100).toFixed(2), note: '' };
-  S.tab = 'add'; render();
+  S.form = { ...blank('settle'), person: owe > 0 ? b : a, amount: (Math.abs(owe) / 100).toFixed(2) };
+  renderSheet();
 }
 
 function seg(field, opts) {
@@ -262,52 +331,60 @@ function seg(field, opts) {
 }
 const whoSeg = (field) => seg(field, S.wallet.members.map((m) => [m.user_id, esc(m.display_name)]));
 
-function add() {
-  if (!S.form) S.form = blank();
+function sheetHtml() {
   const f = S.form;
   const [a, b] = people();
-  let body = '';
-  if (f.type === 'in') {
-    body = `<label>Who added it</label>${whoSeg('person')}
-      <label>What for</label><input name="note" placeholder="e.g. Salary, monthly top-up" value="${esc(f.note)}">`;
-  } else if (f.type === 'out') {
-    body = `<label>Who spent it</label>${whoSeg('person')}
-      <label>Category</label><div class="chips">${CATEGORIES.map((c) => `<button type="button" data-seg="category" data-v="${c}" class="chip ${f.category === c ? 'on' : ''}">${c}</button>`).join('')}</div>
-      <label>What for</label><input name="note" placeholder="e.g. Dinner at Nando's" value="${esc(f.note)}">
-      ${paired() ? `<label>Paid from</label>${seg('paid_from', [['pool', 'The pool'], ['own', 'Own pocket']])}` : ''}
-      <div class="${f.paid_from === 'own' && paired() ? '' : 'hidden'}">
-        <label>Split the cost</label>${seg('mode', [['even', 'Evenly'], ['percent', 'Percentage'], ['items', 'Per item']])}
+  const cats = f.type === 'in' ? IN_CATS : OUT_CATS;
+  const types = [['out', 'Spend'], ['in', 'Add money']].concat(paired() ? [['settle', 'Pay back']] : []);
+  const own = f.type === 'out' && f.paid_from === 'own' && paired();
+  return `<div class="sheet-bg" data-close="1"></div>
+  <div class="sheet" role="dialog" aria-label="Transaction">
+    <div class="sheet-head"><b>${f.id ? 'Edit transaction' : 'New transaction'}</b><button type="button" class="icon" data-close="1" aria-label="Close">✕</button></div>
+    ${seg('type', types)}
+    <div class="amount-in"><span>${esc(S.wallet.currency)}</span><input name="amount" inputmode="decimal" placeholder="0.00" value="${esc(f.amount)}" autocomplete="off"></div>
+    ${f.type === 'settle' ? '' : `<div class="catgrid">${cats.map((c) => `<button type="button" data-seg="category" data-v="${c.name}" class="cat ${f.category === c.name ? 'on' : ''}"><span>${c.icon}</span>${c.name}</button>`).join('')}</div>`}
+    <label>${f.type === 'in' ? 'Added by' : f.type === 'out' ? 'Spent by' : 'Paid back by'}</label>${whoSeg('person')}
+    <div class="row2">
+      ${f.type === 'settle' ? '' : `<div><label>Note</label><input name="note" placeholder="${f.type === 'in' ? 'e.g. March salary' : 'e.g. Dinner'}" value="${esc(f.note)}"></div>`}
+      <div><label>Date</label><input type="date" name="date" value="${esc(f.date)}"></div>
+    </div>
+    ${f.type === 'out' && paired() ? `
+      <label class="switch"><input type="checkbox" id="ownToggle" ${own ? 'checked' : ''}><span>Paid from own pocket (split it)</span></label>
+      <div class="${own ? '' : 'hidden'}">
+        ${seg('mode', [['even', 'Evenly'], ['percent', 'Percentage'], ['items', 'Per item']])}
         <div class="${f.mode === 'percent' ? '' : 'hidden'}">
           <label>${nameOf(a)} <b id="pctA">${f.pctA}</b>% · ${nameOf(b)} <b id="pctB">${100 - f.pctA}</b>%</label>
           <input type="range" min="0" max="100" step="5" name="pctA" value="${f.pctA}">
         </div>
         <div class="${f.mode === 'items' ? '' : 'hidden'}">
-          <label>Items (anything left over, like tax or tip, is split evenly)</label>
+          <label>Items (leftover like tax or tip is split evenly)</label>
           ${f.items.map((it, i) => `<div class="item">
             <input placeholder="Item" data-item="${i}" data-k="name" value="${esc(it.name)}">
             <input placeholder="0.00" inputmode="decimal" data-item="${i}" data-k="amount" value="${esc(it.amount)}">
             <select data-item="${i}" data-k="owner">
               ${[['both', 'Both'], [a, S.wallet.members[0].display_name], [b, S.wallet.members[1]?.display_name]].map(([v, l]) => `<option value="${esc(v)}" ${it.owner === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}
             </select>
-            <button type="button" class="x" data-del="${i}" aria-label="Remove item">×</button></div>`).join('')}
-          <button type="button" class="ghost small" id="addItem">+ Add item</button>
+            <button type="button" class="x" data-del="${i}" aria-label="Remove item">✕</button></div>`).join('')}
+          <button type="button" class="link" id="addItem">＋ Add item</button>
         </div>
-        <div class="mute" id="preview" style="margin-top:10px"></div>
-      </div>`;
-  } else {
-    body = `<label>Who paid back</label>${whoSeg('person')}
-      <div class="mute" style="margin-top:6px">Paying the other person back for own-pocket costs.</div>`;
-  }
-  const types = [['in', 'Add money'], ['out', 'Spend']].concat(paired() ? [['settle', 'Pay back']] : []);
-  return `<div class="card">
-    ${seg('type', types)}
-    <label>Amount</label><input name="amount" inputmode="decimal" placeholder="${f.type === 'out' && f.paid_from === 'own' && f.mode === 'items' ? 'Leave empty to use item total' : '0.00'}" value="${esc(f.amount)}">
-    <label>Date</label><input type="date" name="date" value="${esc(f.date)}">
-    ${body}
-    <div class="row" style="margin-top:16px">
+        <div class="preview" id="preview"></div>
+      </div>` : ''}
+    ${S.msg ? `<div class="err">${esc(S.msg)}</div>` : ''}
+    <div class="sheet-actions">
       ${f.id ? '<button type="button" class="ghost" id="delEntry">Delete</button>' : ''}
-      <button type="button" id="saveEntry" ${S.busy ? 'disabled' : ''}>${f.id ? 'Save changes' : 'Save'}</button>
-    </div></div>`;
+      <button type="button" id="saveEntry" ${S.busy ? 'disabled' : ''}>${S.busy ? 'Saving…' : 'Save'}</button>
+    </div>
+  </div>`;
+}
+
+function renderSheet() {
+  const el = $('#sheet');
+  if (!S.form) { el.innerHTML = ''; document.body.classList.remove('locked'); return; }
+  const scroll = el.querySelector('.sheet')?.scrollTop || 0;
+  el.innerHTML = sheetHtml();
+  el.querySelector('.sheet').scrollTop = scroll;
+  document.body.classList.add('locked');
+  updatePreview();
 }
 
 function buildEntry() {
@@ -315,9 +392,9 @@ function buildEntry() {
   const [a, b] = people();
   const e = { id: f.id || undefined, wallet_id: S.wallet.id, type: f.type, amount: toCents(f.amount), date: f.date || today(),
     person: f.person, to_person: null, paid_from: 'pool', category: '', note: (f.note || '').trim(), split: null };
-  if (f.type === 'settle') { e.to_person = other(f.person); return e; }
-  if (f.type === 'in') return e;
+  if (f.type === 'settle') { e.to_person = other(f.person); e.note = ''; return e; }
   e.category = f.category;
+  if (f.type === 'in') return e;
   e.paid_from = paired() ? f.paid_from : 'pool';
   if (e.paid_from === 'own') {
     const split = { mode: f.mode };
@@ -343,39 +420,47 @@ function updatePreview() {
   p.innerHTML = people().map((x) => `${nameOf(x)} pays <b>${money(sh[x])}</b>`).join(' · ');
 }
 
-function wireAdd() {
-  const app = $('#app');
-  app.oninput = (ev) => {
-    const el = ev.target;
-    if (el.dataset.item !== undefined) S.form.items[el.dataset.item][el.dataset.k] = el.value;
-    else if (el.name) S.form[el.name] = el.value;
-    if (el.name === 'pctA') { $('#pctA').textContent = el.value; $('#pctB').textContent = 100 - el.value; }
+function wireSheet() {
+  const el = $('#sheet');
+  el.oninput = (ev) => {
+    const t = ev.target;
+    if (t.id === 'ownToggle') { S.form.paid_from = t.checked ? 'own' : 'pool'; renderSheet(); return; }
+    if (t.dataset.item !== undefined) S.form.items[t.dataset.item][t.dataset.k] = t.value;
+    else if (t.name) S.form[t.name] = t.value;
+    if (t.name === 'pctA') { $('#pctA').textContent = t.value; $('#pctB').textContent = 100 - t.value; }
     updatePreview();
   };
-  app.onclick = (ev) => {
-    const el = ev.target.closest('button');
-    if (!el) return;
-    if (el.dataset.seg) { S.form[el.dataset.seg] = el.dataset.v; render(); }
-    else if (el.dataset.del !== undefined) { S.form.items.splice(+el.dataset.del, 1); if (!S.form.items.length) S.form.items.push({ name: '', amount: '', owner: 'both' }); render(); }
-    else if (el.id === 'addItem') { S.form.items.push({ name: '', amount: '', owner: 'both' }); render(); }
-    else if (el.id === 'delEntry') { if (confirm('Delete this record?')) run(async () => { await Api.deleteEntry(S.form.id); done(); }); }
-    else if (el.id === 'saveEntry') saveEntry();
+  el.onclick = (ev) => {
+    if (ev.target.dataset?.close) return closeSheet();
+    const t = ev.target.closest('button');
+    if (!t) return;
+    if (t.dataset.close) closeSheet();
+    else if (t.dataset.seg) {
+      S.form[t.dataset.seg] = t.dataset.v;
+      if (t.dataset.seg === 'type') S.form.category = t.dataset.v === 'in' ? 'Top-up' : '';
+      renderSheet();
+    }
+    else if (t.dataset.del !== undefined) { S.form.items.splice(+t.dataset.del, 1); if (!S.form.items.length) S.form.items.push({ name: '', amount: '', owner: 'both' }); renderSheet(); }
+    else if (t.id === 'addItem') { S.form.items.push({ name: '', amount: '', owner: 'both' }); renderSheet(); }
+    else if (t.id === 'delEntry') { if (confirm('Delete this transaction?')) sheetRun(async () => { await Api.deleteEntry(S.form.id); }); }
+    else if (t.id === 'saveEntry') saveEntry();
   };
-  updatePreview();
 }
 
 function saveEntry() {
   const e = buildEntry();
   if (e.amount <= 0) return alert('Enter an amount.');
+  if (e.type === 'out' && !e.category) return alert('Pick a category.');
   if (e.split?.items) {
     if (!e.split.items.length) return alert('Add at least one item.');
     if (e.split.items.reduce((s, i) => s + i.amount, 0) > e.amount) return alert('The items add up to more than the amount.');
   }
-  run(async () => { await Api.saveEntry(e); done(); });
+  sheetRun(async () => { await Api.saveEntry(e); });
 }
-async function done() {
-  S.form = null; S.tab = 'dash';
-  await refresh();
+async function sheetRun(fn) {
+  S.busy = true; S.msg = ''; renderSheet();
+  try { await fn(); S.form = null; await refresh(); } catch (e) { S.msg = e.message || String(e); }
+  S.busy = false; renderSheet(); render();
 }
 
 // ---------- settings ----------
@@ -413,10 +498,8 @@ function saveSettings() {
   });
 }
 
-document.querySelectorAll('nav button').forEach((b) => (b.onclick = () => {
-  S.tab = b.dataset.tab; S.msg = '';
-  if (S.tab === 'add') S.form = blank();
-  render();
-}));
+document.querySelectorAll('nav button').forEach((b) => (b.onclick = () => go(b.dataset.tab)));
+$('#fab').onclick = () => openSheet('out');
+wireSheet();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 start();
